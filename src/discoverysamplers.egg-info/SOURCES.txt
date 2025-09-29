@@ -1,0 +1,9 @@
+pyproject.toml
+src/discoverysamplers/__init__.py
+src/discoverysamplers/eryn_interface.py
+src/discoverysamplers/gpry_interface.py
+src/discoverysamplers/nessai_interface.py
+src/discoverysamplers.egg-info/PKG-INFO
+src/discoverysamplers.egg-info/SOURCES.txt
+src/discoverysamplers.egg-info/dependency_links.txt
+src/discoverysamplers.egg-info/top_level.txt
