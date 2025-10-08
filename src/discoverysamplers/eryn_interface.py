@@ -423,8 +423,6 @@ class DiscoveryErynBridge:
             figs.append(fig)
         return figs
 
-        return fig
-
     # ----- Packing helpers (sampled only) ----- #
     def names(self) -> List[str]:
         return list(self.sampled_names)
