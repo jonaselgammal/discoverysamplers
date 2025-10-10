@@ -70,6 +70,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping,
 import math
 
 import numpy as np
+import numpy.lib.recfunctions as rfn
 
 try:
     # These imports are only needed when actually running the sampler
@@ -79,6 +80,8 @@ try:
 except Exception:  # pragma: no cover - allow import without nessai installed
     FlowSampler = None  # type: ignore
     NessaiModel = object  # type: ignore
+
+import jax.numpy as jnp
 
 
 # -------------------------- Utilities & Types --------------------------- #
@@ -114,33 +117,126 @@ class ParsedPrior:
 
 # ------------------------ Discovery model adapter ----------------------- #
 
-class _DiscoveryAdapter:
+class __DiscoveryAdapter:
     """Uniform interface to call a Discovery-style model.
-
-    We try, in order:
-    - `model.log_prob(params)`
-    - `model.log_likelihood(params)`
-    - `model(params)` (assumed to return log-likelihood)
-    - a provided callable
+    Parameters
+    ----------
+    model : callable | object
+        A callable or object with `logL` method.
+    jit : bool
+        Whether to try to use JAX Just-In-Time compilation.
     """
 
-    def __init__(self, model: Any):
+    def _resolve_jit(self, fn: Callable, jit: bool) -> Callable:
+        try:
+            import jax
+        except ImportError:
+            raise ImportError("JAX not installed. You can't jit without jax.")
+        if jit:
+            try:
+                return jax.jit(fn)
+            except Exception as e:
+                print(f"Warning: failed to jit-compile the model: {e}")
+        return fn
+
+
+    def __init__(self, model: Any, jit=True):
         self.model = model
         # Resolve once to avoid branches in the hot path
         if callable(model):
-            self._fn = model
-        elif hasattr(model, "log_prob") and callable(getattr(model, "log_prob")):
-            self._fn = getattr(model, "log_prob")
+            self._fn = self._resolve_jit(model, jit) if jit else model
         elif hasattr(model, "logL") and callable(getattr(model, "logL")):
-            self._fn = getattr(model, "logL")
+            self._fn = self._resolve_jit(model.logL, jit) if jit else model.logL
         else:
             raise TypeError(
-                "`discovery_model` must be callable or have `log_prob`/`log_likelihood`"
+                "`discovery_model` must be callable or have a `logL` method."
             )
 
     def log_likelihood(self, params: Mapping[str, float]) -> float:
-        return float(self._fn(params))
+        return self._fn(params)
 
+class old_DiscoveryAdapter:
+    """Uniform interface to call a Discovery-style model, with batch support."""
+    def __init__(self, model: Any, jit: bool = True):
+        try:
+            import jax
+            import jax.numpy as jnp
+        except ImportError:
+            raise ImportError("JAX not installed. You can't jit without jax.")
+
+        # Resolve scalar function once
+        if callable(model):
+            fn = model
+        elif hasattr(model, "logL") and callable(getattr(model, "logL")):
+            fn = model.logL
+        else:
+            raise TypeError("`model` must be callable or have a `logL` method.")
+
+        # Scalar path (single set of params)
+        self._fn = jax.jit(fn) if jit else fn
+
+        # Batched path: map over leading axis of each leaf in the params pytree
+        # No static args; dict keys are static by structure.
+        self._batched_fn = jax.jit(jax.vmap(self._fn)) if jit else jax.vmap(self._fn)
+
+    def log_likelihood(self, params: Mapping[str, float]) -> float:
+        # scalar params (dict of 0-d arrays or Python floats)
+        return self._fn(params)
+
+    def log_likelihood_batch(self, params: Mapping[str, "jnp.ndarray"]) -> "jnp.ndarray":
+        # params is a dict of arrays with matching leading dimension
+        return self._batched_fn(params)
+    
+
+class _DiscoveryAdapter:
+    def __init__(self, model: Any, jit=True, order=None):
+        self.model = model
+        # Resolve once to avoid branches in the hot path
+        if callable(model):
+            self._fn = self._resolve_jit(model, jit) if jit else model
+        elif hasattr(model, "logL") and callable(getattr(model, "logL")):
+            self._fn = self._resolve_jit(model.logL, jit) if jit else model.logL
+        else:
+            raise TypeError(
+                "`discovery_model` must be callable or have a `logL` method."
+            )
+
+    def _resolve_jit(self, fn: Callable, jit: bool) -> Callable:
+        try:
+            import jax
+        except ImportError:
+            raise ImportError("JAX not installed. You can't jit without jax.")
+        if jit:
+            try:
+                return jax.jit(fn)
+            except Exception as e:
+                print(f"Warning: failed to jit-compile the model: {e}")
+        return fn
+
+    def log_likelihood(self, params: Mapping[str, float]) -> float:
+        return self._fn(params)
+
+    # -------- New: compiled array interfaces (no dicts in the hot path) --------
+    def configure_array_api(self, order):
+        """Set the fixed parameter order (tuple of names). Call once at setup."""
+        import jax
+        self._order = tuple(order)
+        row_order = self._order
+        base = self._fn  # already jitted above
+
+        def row_to_scalar(row):
+            # Dict is built here during tracing; not per runtime call.
+            params = {name: row[i] for i, name in enumerate(row_order)}
+            return base(params)  # scalar logL
+
+        self._row = jax.jit(row_to_scalar)
+        self._mat = jax.jit(jax.vmap(self._row))
+
+    def log_likelihood_row(self, row):
+        return self._row(row)
+
+    def log_likelihood_matrix(self, X):
+        return self._mat(X)
 
 # ---------------------------- Prior parsing ---------------------------- #
 
@@ -235,9 +331,9 @@ def _split_priors(prior: Mapping[ParamName, PriorSpec]):
         # Bounds are required by nessai for sampling. For normal, require explicit bounds.
         if p.bounds is None:
             if p.dist == "normal":
-                raise PriorParsingError(
-                    f"Normal prior for {name} requires finite 'bounds' for nessai."
-                )
+                # Set a standard 5-sigma bound if none provided
+                print(f"Warning: setting 5-sigma bounds for normal prior '{name}'")
+                p.bounds = (-5 * p.params["sigma"] + p.params["mean"], 5 * p.params["sigma"] + p.params["mean"])
             else:
                 raise PriorParsingError(f"Bounds are required for prior '{name}' with dist {p.dist}.")
         bounds[name] = (float(p.bounds[0]), float(p.bounds[1]))
@@ -320,11 +416,18 @@ class DiscoveryNessaiModel(NessaiModel):
                  fixed_params: Dict[str, float],
                  discovery_adapter: _DiscoveryAdapter):
         super().__init__()
-        self.names = list(names)
+        self.names = list(names)                      
+        self._names_tuple = tuple(self.names)          # optional: faster internal iteration
+
         self.bounds = dict(bounds)
         self._logprior_fns = dict(logprior_fns)
         self._fixed = dict(fixed_params)
         self._adapter = discovery_adapter
+
+        # Keep a fixed column order for packed matrices
+        self._all_names = self._names_tuple + tuple(self._fixed.keys())
+        if hasattr(self._adapter, "configure_array_api"):
+            self._adapter.configure_array_api(self._all_names)
 
     def log_prior(self, x: np.ndarray) -> np.ndarray:
         xb = _as_batch_struct(x)                 # shape (N,)
@@ -343,21 +446,59 @@ class DiscoveryNessaiModel(NessaiModel):
         # Preserve scalar-like return for N=1 while keeping ndarray type
         return total if N > 1 else np.array(total[0])
 
+    def __log_likelihood(self, x: np.ndarray) -> np.ndarray:
+        xb = _as_batch_struct(x)                 # shape (N,)
+        N = xb.shape[0]
+
+        # Build a params dict of DEVICE arrays (one leaf per parameter).
+        # Important: avoid Python float() casts, they pull values to host.
+        params = {n: jnp.asarray(xb[n]) for n in self.names}
+
+        # Broadcast fixed params to shape (N,)
+        if self._fixed:
+            params.update({k: jnp.full((N,), float(v)) for k, v in self._fixed.items()})
+
+        # One batched call; returns shape (N,)
+        return self._adapter.log_likelihood_batch(params)
+
+    def old_log_likelihood(self, x: np.ndarray) -> np.ndarray:
+        xb = _as_batch_struct(x)                   # structured np array with shape (N,)
+        N = xb.shape[0]
+
+        # 1) Build ONE dense host array (N, D_s) from the structured array.
+        # This is vectorised C code; usually zero-copy view when dtypes are uniform.
+        X = rfn.structured_to_unstructured(xb[list(self.names)], dtype=np.float64)
+        # (N, D_s). Ensure contiguous, then ONE device transfer:
+        Xj = jnp.asarray(np.ascontiguousarray(X), dtype=jnp.float64)
+
+        # 2) Append fixed params as broadcast columns (on device, no Python loop per-row)
+        if self._fixed:
+            fvec = jnp.array([float(self._fixed[k]) for k in self._fixed], dtype=jnp.float64)   # (D_f,)
+            F = jnp.broadcast_to(fvec, (N, fvec.size))                                          # (N, D_f)
+            Xj = jnp.concatenate([Xj, F], axis=1)                                               # (N, D)
+
+        # 3) Cheap column views to rebuild dict-of-arrays (no device_puts here)
+        params = {n: Xj[:, i] for i, n in enumerate(self._all_names)}
+
+        # 4) Single batched call (vmap+jit inside adapter)
+        return self._adapter.log_likelihood_batch(params)
+
     def log_likelihood(self, x: np.ndarray) -> np.ndarray:
         xb = _as_batch_struct(x)                 # shape (N,)
         N = xb.shape[0]
-        ll = np.empty(N, dtype=float)
-
-        # Adapter likely expects scalar params; evaluate per-sample
-        for i in range(N):
-            params = {n: float(xb[n][i]) for n in self.names}
-            if self._fixed:
-                # Avoid mutating self._fixed
-                params.update(self._fixed)
-            ll[i] = float(self._adapter.log_likelihood(params))
-
-        return ll if N > 1 else np.array(ll[0])
-
+        # Build one dense host array (N, D_s)
+        cols = [xb[n].astype(np.float64, copy=False) for n in self._names_tuple]
+        X = np.column_stack(cols)  # (N, D_s)
+        # Append fixed params on host
+        if self._fixed:
+            fvec = np.array([self._fixed[k] for k in self._fixed], dtype=np.float64)  # (D_f,)
+            if fvec.size:
+                F = np.broadcast_to(fvec, (N, fvec.size))                              # (N, D_f)
+                X = np.concatenate([X, F], axis=1)                                    # (N, D)
+        # One device put, zero dicts:
+        Xj = jnp.asarray(X, dtype=jnp.float64)
+        return self._adapter.log_likelihood_matrix(Xj)
+    
     # nessai calls these with a *structured* numpy array `x`
     def _log_prior(self, x: np.ndarray) -> float:
         total = 0.0
@@ -368,9 +509,12 @@ class DiscoveryNessaiModel(NessaiModel):
         return np.array(total)
 
     def _log_likelihood(self, x: np.ndarray) -> float:
-        params = {n: float(x[n]) for n in self.names}
-        params.update(self._fixed)
-        return np.array(self._adapter.log_likelihood(params))
+        # Scalar path: pack one row -> array -> compiled row call (no dicts here either)
+        vals = [float(x[n]) for n in self._names_tuple]
+        if self._fixed:
+            vals.extend(float(self._fixed[k]) for k in self._fixed)
+        row = jnp.asarray(np.asarray(vals, dtype=np.float64))
+        return self._adapter.log_likelihood_row(row)
 
 
 # ------------------------- Public bridge class ------------------------- #
@@ -399,8 +543,9 @@ class DiscoveryNessaiBridge:
     def __init__(self,
                  discovery_model: Any,
                  priors: Mapping[str, PriorSpec],
-                 latex_labels: Optional[Mapping[str, str]] = None):
-        self.adapter = _DiscoveryAdapter(discovery_model)
+                 latex_labels: Optional[Mapping[str, str]] = None,
+                 jit: bool = True):
+        self.adapter = _DiscoveryAdapter(discovery_model, jit=jit)
         snames, fixed, bounds, lpfns = _split_priors(priors)
         if not snames:
             raise ValueError("No sampled parameters defined (all fixed?)")
@@ -425,7 +570,7 @@ class DiscoveryNessaiBridge:
             bounds=self.bounds,
             logprior_fns=lpfns,
             fixed_params=self.fixed_params,
-            discovery_adapter=self.adapter,
+            discovery_adapter=self.adapter
         )
 
     # Convenience helpers -------------------------------------------------
