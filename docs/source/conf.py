@@ -16,6 +16,27 @@ author = 'Jonas El Gammal'
 release = '0.1.0'
 version = '0.1.0'
 
+# -- Mock imports for autodoc ------------------------------------------------
+# These modules won't be installed on ReadTheDocs, so we mock them
+autodoc_mock_imports = [
+    'eryn',
+    'nessai',
+    'jaxns',
+    'gpry',
+    'cobaya',
+    'jax',
+    'jaxlib',
+    'numpyro',
+    'discovery',
+    'enterprise',
+    'enterprise_extensions',
+    'emcee',
+    'corner',
+    'getdist',
+    'scipy',
+    'sklearn',
+]
+
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
