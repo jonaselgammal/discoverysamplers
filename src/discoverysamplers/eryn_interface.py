@@ -320,6 +320,23 @@ class DiscoveryErynBridge:
             raise RuntimeError("Could not get chain from sampler. Make sure sampling has been run.") from e
         return {"names": self.sampled_names, "labels": self.sampled_names_latex, "chain": chain}  # shape (nwalkers*nsteps, n_sampled_params)
 
+    def return_logZ(self, *, results=None) -> Dict[str, float]:
+        """
+        Return the log evidence estimate.
+        
+        Note: Eryn is an MCMC sampler and does not compute the Bayesian evidence.
+        This method is provided for API consistency but raises NotImplementedError.
+        
+        Raises
+        ------
+        NotImplementedError
+            Always raised - MCMC samplers do not compute evidence
+        """
+        raise NotImplementedError(
+            "Eryn is an MCMC sampler and does not compute the Bayesian evidence (logZ). "
+            "Use a nested sampling method (Nessai, JAX-NS) if you need evidence estimates."
+        )
+
     def plot_trace(self, burn=0, plot_fixed=False):
         """Plot the MCMC chains for all parameters.
         This method creates a plot showing the evolution of all parameter chains across steps, 
@@ -484,21 +501,22 @@ class DiscoveryErynBridge:
             for i, parname in enumerate(discovery_paramnames):
                 spec = priors[parname]
                 if spec is None or spec == "default":
-
+                    # Use default prior from Discovery
                     for par, range in priordict_standard.items():
                         if re.match(par, parname):
                             sampled_prior_dict[parname] = uniform_dist(range[0], range[1])
                             break
                     else:
                         raise KeyError(f"No known default prior for {parname}. Please provide priors explicitly.")
-                elif isinstance(spec, object) and not isinstance(spec, dict):
+                elif not isinstance(spec, dict):
+                    # Custom prior object - must have logpdf and rvs methods
                     if hasattr(spec, 'logpdf') and hasattr(spec, 'rvs'):
                         sampled_prior_dict[parname] = spec
                     else:
                         raise ValueError(f"Prior object for {parname} must have logpdf and rvs methods.")
                 elif 'dist' not in spec:
                     raise ValueError(f"Prior for {parname} missing 'dist' key.")
-                if spec['dist'] == 'uniform':
+                elif spec['dist'] == 'uniform':
                     if 'min' not in spec or 'max' not in spec:
                         raise ValueError(f"Uniform prior for {parname} requires 'min' and 'max'.")
                     sampled_prior_dict[parname] = uniform_dist(spec['min'], spec['max'])
@@ -511,5 +529,5 @@ class DiscoveryErynBridge:
                         raise ValueError(f"Fixed prior for {parname} requires 'value'.")
                     fixed_params[parname] = spec['value']
                 else:
-                    raise ValueError(f"Unsupported prior dist '{spec['dist']}' for {parname}. Supported: uniform, log_uniform, fixed.")
+                    raise ValueError(f"Unsupported prior dist '{spec['dist']}' for {parname}. Supported: uniform, loguniform, fixed.")
         return sampled_prior_dict, fixed_params

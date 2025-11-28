@@ -65,23 +65,26 @@ Example
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple, Union
 import math
+import os
 
 import numpy as np
 import numpy.lib.recfunctions as rfn
+
+from .priors import ParsedPrior, PriorParsingError, _parse_single_prior, _split_priors, ParamName, PriorSpec
+from .likelihood import LikelihoodWrapper
 
 try:
     # These imports are only needed when actually running the sampler
     import nessai
     from nessai.flowsampler import FlowSampler
     from nessai.model import Model as NessaiModel
+    import jax.numpy as jnp
 except Exception:  # pragma: no cover - allow import without nessai installed
     FlowSampler = None  # type: ignore
     NessaiModel = object  # type: ignore
-
-import jax.numpy as jnp
+    jnp = None  # type: ignore
 
 
 # -------------------------- Utilities & Types --------------------------- #
@@ -97,147 +100,40 @@ def _as_batch_struct(x: np.ndarray) -> np.ndarray:
         xb = xb.reshape(-1)
     return xb
 
-ParamName = str
-PriorSpec = Union[
-    Mapping[str, Any],              # dict specification
-    Tuple[str, float, float],       # ('uniform', min, max) or ('loguniform', a, b)
-    Tuple[str, float, float, float],# ('normal', mean, sigma, _unused_)
-    Tuple[str, float],              # ('fixed', value)
-]
+
+# ------------------------ Nessai-specific prior utilities --------------- #
+
+def _convert_parsed_prior_to_nessai(parsed: ParsedPrior, name: str) -> Tuple[Optional[Tuple[float, float]], Dict[str, float]]:
+    """
+    Convert a ParsedPrior from the common module to nessai-compatible format.
+
+    Returns
+    -------
+    bounds : tuple or None
+        (min, max) bounds for the parameter
+    params : dict
+        Parameter-specific values (min, max for uniform, a, b for loguniform, etc.)
+    """
+    if parsed.dist_type == 'uniform':
+        return parsed.bounds, {"min": parsed.bounds[0], "max": parsed.bounds[1]}
+    elif parsed.dist_type == 'loguniform':
+        return parsed.bounds, {"a": parsed.bounds[0], "b": parsed.bounds[1]}
+    elif parsed.dist_type == 'normal':
+        return parsed.bounds, {"mean": parsed.mean, "sigma": parsed.sigma}
+    elif parsed.dist_type == 'fixed':
+        return None, {"value": parsed.value}
+    elif parsed.dist_type == 'callable':
+        return parsed.bounds, {}
+    else:
+        raise PriorParsingError(f"Unsupported prior type '{parsed.dist_type}' for '{name}'")
 
 
-@dataclass
-class ParsedPrior:
-    dist: str  # 'uniform' | 'loguniform' | 'normal' | 'fixed' | 'callable'
-    bounds: Optional[Tuple[float, float]]
-    params: Dict[str, float]
-    # For callable priors, a callable with signature logpdf(x) -> float
-    logpdf: Optional[Callable[[float], float]] = None
+def _split_priors_nessai(prior: Mapping[ParamName, PriorSpec]):
+    """
+    Split priors into sampled and fixed parameters for nessai.
 
-
-# ------------------------ Discovery model adapter ----------------------- #
-    
-class _DiscoveryAdapter:
-    def __init__(self, model: Any, jit=True, order=None):
-        self.model = model
-        # Resolve once to avoid branches in the hot path
-        if callable(model):
-            self._fn = self._resolve_jit(model, jit) if jit else model
-        elif hasattr(model, "logL") and callable(getattr(model, "logL")):
-            self._fn = self._resolve_jit(model.logL, jit) if jit else model.logL
-        else:
-            raise TypeError(
-                "`discovery_model` must be callable or have a `logL` method."
-            )
-
-    def _resolve_jit(self, fn: Callable, jit: bool) -> Callable:
-        try:
-            import jax
-        except ImportError:
-            raise ImportError("JAX not installed. You can't jit without jax.")
-        if jit:
-            try:
-                return jax.jit(fn)
-            except Exception as e:
-                print(f"Warning: failed to jit-compile the model: {e}")
-        return fn
-
-    def log_likelihood(self, params: Mapping[str, float]) -> float:
-        return self._fn(params)
-
-    # -------- New: compiled array interfaces (no dicts in the hot path) --------
-    def configure_array_api(self, order):
-        """Set the fixed parameter order (tuple of names). Call once at setup."""
-        import jax
-        self._order = tuple(order)
-        row_order = self._order
-        base = self._fn  # already jitted above
-
-        def row_to_scalar(row):
-            # Dict is built here during tracing; not per runtime call.
-            params = {name: row[i] for i, name in enumerate(row_order)}
-            return base(params)  # scalar logL
-
-        self._row = jax.jit(row_to_scalar)
-        self._mat = jax.jit(jax.vmap(self._row))
-
-    def log_likelihood_row(self, row):
-        return self._row(row)
-
-    def log_likelihood_matrix(self, X):
-        return self._mat(X)
-
-# ---------------------------- Prior parsing ---------------------------- #
-
-class PriorParsingError(ValueError):
-    pass
-
-
-def _parse_single_prior(name: str, spec: PriorSpec) -> ParsedPrior:
-    # Shorthand tuple forms
-    if isinstance(spec, tuple):
-        tag = spec[0].lower()
-        if tag == "uniform":
-            _, a, b = spec
-            return ParsedPrior("uniform", (float(a), float(b)), {"min": float(a), "max": float(b)})
-        if tag == "loguniform":
-            _, a, b = spec
-            return ParsedPrior("loguniform", (float(a), float(b)), {"a": float(a), "b": float(b)})
-        if tag == "normal":
-            # Allow ('normal', mean, sigma) or ('normal', mean, sigma, _)
-            if len(spec) == 3:
-                _, mu, sigma = spec
-            else:
-                _, mu, sigma, _unused = spec
-            return ParsedPrior("normal", None, {"mean": float(mu), "sigma": float(sigma)})
-        if tag == "fixed":
-            _, val = spec
-            return ParsedPrior("fixed", None, {"value": float(val)})
-        raise PriorParsingError(f"Unsupported prior tuple for {name}: {spec}")
-
-    # Dict-like
-    if isinstance(spec, Mapping):
-        if "dist" not in spec:
-            # Callable prior with explicit bounds
-            if callable(spec.get("logpdf")):
-                bounds = spec.get("bounds")
-                if bounds is None:
-                    raise PriorParsingError(
-                        f"Callable prior for {name} requires 'bounds'=(min,max)."
-                    )
-                return ParsedPrior("callable", (float(bounds[0]), float(bounds[1])), {}, logpdf=spec["logpdf"])            
-            raise PriorParsingError(f"Prior for {name} missing 'dist' key: {spec}")
-        dist = str(spec["dist"]).lower()
-        if dist == "uniform":
-            a, b = spec.get("min"), spec.get("max")
-            if a is None or b is None:
-                raise PriorParsingError(f"Uniform prior for {name} requires 'min' and 'max'")
-            return ParsedPrior("uniform", (float(a), float(b)), {"min": float(a), "max": float(b)})
-        if dist == "loguniform":
-            a, b = spec.get("a"), spec.get("b")
-            if a is None or b is None:
-                raise PriorParsingError(f"Log-uniform prior for {name} requires 'a' and 'b'")
-            return ParsedPrior("loguniform", (float(a), float(b)), {"a": float(a), "b": float(b)})
-        if dist == "normal":
-            mu, sigma = spec.get("mean"), spec.get("sigma")
-            if mu is None or sigma is None:
-                raise PriorParsingError(f"Normal prior for {name} requires 'mean' and 'sigma'")
-            # Normal is unbounded; user can add 'bounds' if desired
-            bounds = spec.get("bounds")
-            bnd = (float(bounds[0]), float(bounds[1])) if bounds is not None else None
-            return ParsedPrior("normal", bnd, {"mean": float(mu), "sigma": float(sigma)})
-        if dist == "fixed":
-            val = spec.get("value")
-            if val is None:
-                raise PriorParsingError(f"Fixed prior for {name} requires 'value'")
-            return ParsedPrior("fixed", None, {"value": float(val)})
-        raise PriorParsingError(f"Unsupported prior dist '{dist}' for {name}")
-
-    raise PriorParsingError(f"Unsupported prior spec for {name}: {spec}")
-
-
-def _split_priors(prior: Mapping[ParamName, PriorSpec]):
-    """Split priors into sampled and fixed parameters and derive bounds.
+    This is a nessai-specific wrapper around the common _split_priors function.
+    It handles nessai's requirement for explicit bounds on normal priors.
 
     Returns
     -------
@@ -246,76 +142,17 @@ def _split_priors(prior: Mapping[ParamName, PriorSpec]):
     bounds : dict[str, tuple[float, float]]
     logprior_fns : dict[str, Callable[[float], float]]
     """
-    sampled_names: List[str] = []
-    fixed: Dict[str, float] = {}
-    bounds: Dict[str, Tuple[float, float]] = {}
-    logprior_fns: Dict[str, Callable[[float], float]] = {}
+    # Use the common splitting function
+    sampled_names, fixed, bounds, logprior_fns = _split_priors(prior)
 
-    for name, spec in prior.items():
-        p = _parse_single_prior(name, spec)
-        if p.dist == "fixed":
-            fixed[name] = p.params["value"]
-            continue
-        sampled_names.append(name)
-        # Bounds are required by nessai for sampling. For normal, require explicit bounds.
-        if p.bounds is None:
-            if p.dist == "normal":
-                # Set a standard 5-sigma bound if none provided
-                print(f"Warning: setting 5-sigma bounds for normal prior '{name}'")
-                p.bounds = (-5 * p.params["sigma"] + p.params["mean"], 5 * p.params["sigma"] + p.params["mean"])
-            else:
-                raise PriorParsingError(f"Bounds are required for prior '{name}' with dist {p.dist}.")
-        bounds[name] = (float(p.bounds[0]), float(p.bounds[1]))
-
-        # Build logpdf callable per parameter
-        if p.dist == "uniform":
-            a, b = p.params["min"], p.params["max"]
-            width = b - a
-            const = -math.log(width)
-            def make_uniform(a=a, b=b, const=const):
-                def _logpdf(x: float) -> float:
-                    return const if (a <= x <= b) else -math.inf
-                return _logpdf
-            logprior_fns[name] = make_uniform()
-        elif p.dist == "loguniform":
-            a, b = p.params["a"], p.params["b"]
-            if a <= 0 or b <= 0:
-                raise PriorParsingError(f"Log-uniform bounds must be positive for {name}")
-            c = math.log(a)
-            norm = -math.log(math.log(b) - math.log(a))
-            def make_loguni(a=a, b=b, c=c, norm=norm):
-                def _logpdf(x: float) -> float:
-                    if x <= 0 or x < a or x > b:
-                        return -math.inf
-                    return -math.log(x) + norm
-                return _logpdf
-            logprior_fns[name] = make_loguni()
-        elif p.dist == "normal":
-            mu, sigma = p.params["mean"], p.params["sigma"]
-            const = -0.5 * math.log(2 * math.pi * sigma * sigma)
-            def make_norm(mu=mu, sigma=sigma, const=const, b=p.bounds):
-                lo, hi = b if b is not None else (-math.inf, math.inf)
-                def _logpdf(x: float) -> float:
-                    if not (lo <= x <= hi):
-                        return -math.inf
-                    z = (x - mu) / sigma
-                    return const - 0.5 * z * z
-                return _logpdf
-            logprior_fns[name] = make_norm()
-        elif p.dist == "callable":
-            if p.logpdf is None:
-                raise PriorParsingError(f"Callable prior for {name} missing logpdf")
-            b = p.bounds
-            lo, hi = b if b is not None else (-math.inf, math.inf)
-            def make_callable(lp=p.logpdf, lo=lo, hi=hi):
-                def _logpdf(x: float) -> float:
-                    if not (lo <= x <= hi):
-                        return -math.inf
-                    return float(lp(x))
-                return _logpdf
-            logprior_fns[name] = make_callable()
-        else:
-            raise PriorParsingError(f"Unsupported prior dist '{p.dist}' while building logpdf for {name}")
+    # Nessai-specific: check that all sampled parameters have finite bounds
+    for name in sampled_names:
+        if bounds[name] == (-np.inf, np.inf):
+            raise PriorParsingError(
+                f"Nessai requires finite bounds for all parameters. "
+                f"Parameter '{name}' has infinite bounds. "
+                f"For normal priors, specify bounds explicitly."
+            )
 
     return sampled_names, fixed, bounds, logprior_fns
 
@@ -335,7 +172,7 @@ class DiscoveryNessaiModel(NessaiModel):
         Per-parameter log-prior functions.
     fixed_params : dict[str, float]
         Parameters that are not sampled.
-    discovery_adapter : _DiscoveryAdapter
+    discovery_adapter : LikelihoodWrapper
         Adapter to call the Discovery model with a parameter dict.
     """
     def __init__(self,
@@ -343,7 +180,7 @@ class DiscoveryNessaiModel(NessaiModel):
                  bounds: Dict[str, Tuple[float, float]],
                  logprior_fns: Dict[str, Callable[[float], float]],
                  fixed_params: Dict[str, float],
-                 discovery_adapter: _DiscoveryAdapter):
+                 discovery_adapter: LikelihoodWrapper):
         super().__init__()
         self.names = list(names)                      
         self._names_tuple = tuple(self.names)          # optional: faster internal iteration
@@ -352,6 +189,9 @@ class DiscoveryNessaiModel(NessaiModel):
         self._logprior_fns = dict(logprior_fns)
         self._fixed = dict(fixed_params)
         self._adapter = discovery_adapter
+        
+        # Allow non-deterministic likelihoods (disable verification check)
+        self.allow_multi_valued_likelihood = True
 
         # Keep a fixed column order for packed matrices
         self._all_names = self._names_tuple + tuple(self._fixed.keys())
@@ -437,8 +277,8 @@ class DiscoveryNessaiBridge:
                  priors: Mapping[str, PriorSpec],
                  latex_labels: Optional[Mapping[str, str]] = None,
                  jit: bool = True):
-        self.adapter = _DiscoveryAdapter(discovery_model, jit=jit)
-        snames, fixed, bounds, lpfns = _split_priors(priors)
+        self.adapter = LikelihoodWrapper(discovery_model, jit=jit, fixed_params=None, allow_array_api=True)
+        snames, fixed, bounds, lpfns = _split_priors_nessai(priors)
         if not snames:
             raise ValueError("No sampled parameters defined (all fixed?)")
         self.sampled_names = snames
@@ -518,9 +358,72 @@ class DiscoveryNessaiBridge:
             **kwargs,
         )
         self.results = self.sampler.run()
+        
+        # If run() returns None (newer nessai versions), construct results dict from sampler state
+        if self.results is None and hasattr(self.sampler, 'ns') and hasattr(self.sampler.ns, 'state'):
+            state = self.sampler.ns.state
+            self.results = {
+                'logZ': state.log_evidence if hasattr(state, 'log_evidence') else None,
+                'logZ_err': state.log_evidence_error if hasattr(state, 'log_evidence_error') else None,
+                'nested_samples': getattr(self.sampler.ns, 'nested_samples', None),
+                'posterior_samples': getattr(self.sampler, 'posterior_samples', None),
+            }
 
         return self.results
     
+    def return_logZ(self, *, results: Optional[Mapping[str, Any]] = None) -> Dict[str, float]:
+        """
+        Return the log evidence and its uncertainty from nested sampling.
+        
+        Parameters
+        ----------
+        results : dict, optional
+            Results dict from run_sampler(). If None, uses stored results.
+            
+        Returns
+        -------
+        dict
+            Dictionary containing:
+            - 'logZ': float - the log evidence estimate
+            - 'logZ_err': float - uncertainty on logZ
+            
+        Raises
+        ------
+        RuntimeError
+            If no results are available (run_sampler not called)
+        """
+        res = results if results is not None else self.results
+        if res is None:
+            raise RuntimeError("No results available. Run `run_sampler()` first.")
+        
+        # Try to extract logZ from results dict
+        logZ = None
+        logZ_err = None
+        
+        # Check common keys in results dict
+        for key in ('logZ', 'log_evidence', 'log_Z', 'evidence'):
+            if key in res:
+                logZ = float(res[key])
+                break
+        
+        for key in ('logZ_err', 'log_evidence_error', 'log_Z_err', 'evidence_error', 'logZerr'):
+            if key in res:
+                logZ_err = float(res[key])
+                break
+        
+        # If not found in results, try sampler state
+        if logZ is None and self.sampler is not None:
+            if hasattr(self.sampler, 'ns') and hasattr(self.sampler.ns, 'state'):
+                state = self.sampler.ns.state
+                if hasattr(state, 'log_evidence'):
+                    logZ = float(state.log_evidence)
+                if hasattr(state, 'log_evidence_error'):
+                    logZ_err = float(state.log_evidence_error)
+        
+        if logZ is None:
+            raise RuntimeError("Could not find log evidence in results. Check that sampling completed successfully.")
+        
+        return {'logZ': logZ, 'logZ_err': logZ_err}
 
     # ------------------------ Results & samples ------------------------ #
     def _posterior_struct_array(self, results: Optional[Mapping[str, Any]] = None) -> np.ndarray:
