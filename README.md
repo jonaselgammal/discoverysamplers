@@ -4,6 +4,9 @@
 
 [![Documentation Status](https://readthedocs.org/projects/discoverysamplers/badge/?version=latest)](https://discoverysamplers.readthedocs.io/en/latest/?badge=latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Tests](https://github.com/jonaselgammal/discoverysamplers/actions/workflows/tests.yml/badge.svg)](https://github.com/jonaselgammal/discoverysamplers/actions/workflows/tests.yml)
+
+📖 **Documentation**: [https://discoverysamplers.readthedocs.io](https://discoverysamplers.readthedocs.io)
 
 ## Overview
 
