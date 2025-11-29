@@ -337,108 +337,59 @@ class DiscoveryErynBridge:
             "Use a nested sampling method (Nessai, JAX-NS) if you need evidence estimates."
         )
 
-    def plot_trace(self, burn=0, plot_fixed=False):
+    def plot_trace(self, burn=0, plot_fixed=False, **kwargs):
         """Plot the MCMC chains for all parameters.
-        This method creates a plot showing the evolution of all parameter chains across steps, 
-        temperatures and walkers.
+        
         Parameters
         ----------
         burn : int, optional
             Number of initial steps to discard from the plot, by default 0
         plot_fixed : bool, optional
             If True, includes fixed parameters in the plot, by default False
+        **kwargs
+            Additional keyword arguments passed to plots.plot_trace()
+            
         Returns
         -------
         matplotlib.figure.Figure
             Figure object containing the trace plots
-        Notes
-        -----
-        - Each parameter is plotted in a separate subplot
-        - For fixed parameters, their fixed values are shown as horizontal red dashed lines
-        - For multiple temperatures, different colors are used for each temperature chain
-        - Multiple walkers are plotted with low opacity to show the overall evolution
-        - With multiple temperatures, a legend is added above the figure showing temperature indices
-        Examples
-        --------
-        >>> sampler.plot_trace(burn=1000)  # Plot chains excluding first 1000 steps
-        >>> sampler.plot_trace(plot_fixed=True)  # Include fixed parameters in plot
         """
-
-        import matplotlib.pyplot as plt
+        from .plots import plot_trace
 
         if plot_fixed:
             samples = self.return_all_samples()
         else:
             samples = self.return_sampled_samples()
-        chain = samples["chain"][burn:] 
-        names = samples["names"]
-        labels = samples["labels"]
-
-        ntemps = chain.shape[1]
-        nwalkers = chain.shape[2]
-
-        n_params = len(names)
-        fig, axes = plt.subplots(n_params, 1, figsize=(8, 2 * n_params), sharex=True)
-
-        for i, name in enumerate(names):
-            ax = axes[i] if n_params > 1 else axes
-            ax.set_ylabel(labels[i])
-            if name in self.fixed_names:
-                ax.axhline(self.fixed_param_dict[name], color='r', linestyle='--', label='Fixed value')
-                ax.legend()
-                continue
-            for j in range(ntemps):
-                for k in range(nwalkers):
-                    ax.plot(chain[:, j, k, :, i].reshape(-1), alpha=0.1, color=f'C{j}')
-        axes[-1].set_xlabel('Step number')
-        # If there is more than 1 temperature, add a legend on top of the figure outside the axes
-        if ntemps > 1:
-            handles = [plt.Line2D([0], [0], color=f'C{i}', lw=2, label=f'Temp {i}') for i in range(ntemps)]
-            fig.legend(handles=handles, loc='upper center', ncol=ntemps, bbox_to_anchor=(0.5, 1.02))
-        fig.tight_layout(rect=[0, 0, 1, 0.97])
-        return fig
+        
+        return plot_trace(
+            samples, 
+            burn=burn,
+            fixed_params=self.fixed_param_dict,
+            fixed_names=self.fixed_names,
+            **kwargs
+        )
     
-    def plot_corner(self, burn=0, **kwargs):
-        """
-        Create corner plots for the MCMC chain at each temperature.
-        This method generates corner plots using the 'corner' package, displaying the 
-        marginal distributions and correlations between parameters for each temperature
-        in the MCMC sampling.
+    def plot_corner(self, burn=0, temp=0, **kwargs):
+        """Create corner plots for the MCMC chain.
+        
         Parameters
         ----------
         burn : int, optional
-            Number of initial samples to discard as burn-in period. Default is 0.
-        **kwargs : dict
-            Additional keyword arguments to pass to corner.corner().
+            Number of initial samples to discard as burn-in period, by default 0.
+        temp : int, optional
+            Temperature index to plot (0 = cold chain), by default 0.
+        **kwargs
+            Additional keyword arguments passed to corner.corner().
+            
         Returns
         -------
-        list of matplotlib.figure.Figure
-            List of corner plot figures, one for each temperature in the chain.
-        Notes
-        -----
-        The corner plots show the marginalized posterior distributions for each parameter
-        along the diagonal, and the 2D projections of the posterior probability 
-        distributions for each pair of parameters in the off-diagonal panels.
-        Requires the 'corner' package to be installed.
+        matplotlib.figure.Figure
+            Corner plot figure.
         """
-
-        import corner
+        from .plots import plot_corner
 
         samples = self.return_sampled_samples()
-        chain = samples["chain"][burn:] 
-        labels = samples["labels"]
-
-        ntemps = chain.shape[1]
-        nwalkers = chain.shape[2]
-
-        # Make a corner plot for each temperature since they have different distributions
-        figs = []
-        for i in range(ntemps):
-
-            flat_chain = chain[:, i, :, :].reshape(-1, self.ndim)
-            fig = corner.corner(flat_chain, labels=labels, **kwargs)
-            figs.append(fig)
-        return figs
+        return plot_corner(samples, burn=burn, temp=temp, **kwargs)
 
     # ----- Packing helpers (sampled only) ----- #
     def names(self) -> List[str]:

@@ -85,6 +85,7 @@ Documentation Contents
    user_guide/nessai_usage
    user_guide/jaxns_usage
    user_guide/gpry_usage
+   user_guide/plotting
    user_guide/model_requirements
 
 .. toctree::
@@ -93,6 +94,7 @@ Documentation Contents
 
    api/priors
    api/likelihood
+   api/plots
    api/eryn_interface
    api/nessai_interface
    api/jaxns_interface

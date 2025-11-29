@@ -523,34 +523,56 @@ class DiscoveryJAXNSBridge:
         return {'logZ': logZ, 'logZ_err': logZ_err}
 
     # ------------------------------ Plots ------------------------------ #
-    def plot_trace(self, *, burn: int = 0, plot_fixed: bool = False, results=None):
-        import matplotlib.pyplot as plt
-        data = self.return_all_samples(results=results) if plot_fixed else self.return_sampled_samples(results=results)
-        chain = data["chain"]
-        names = data["names"]
-        labels = data["labels"]
-        if burn > 0:
-            chain = chain[burn:]
+    def plot_trace(self, *, burn: int = 0, plot_fixed: bool = False, results=None, **kwargs):
+        """
+        Plot trace of samples vs sample index.
+        
+        Parameters
+        ----------
+        burn : int, optional
+            Number of initial samples to discard, by default 0.
+        plot_fixed : bool, optional
+            If True, includes fixed parameters in the plot, by default False.
+        results : optional
+            Results from run_sampler(). If None, uses stored results.
+        **kwargs
+            Additional keyword arguments passed to plots.plot_trace().
+            
+        Returns
+        -------
+        matplotlib.figure.Figure
+            Figure containing the trace plots.
+        """
+        from .plots import plot_trace
 
-        n_params = len(names)
-        fig, axes = plt.subplots(n_params, 1, figsize=(9, max(2.2, 1.8 * n_params)), sharex=True)
-        axes_arr = np.atleast_1d(axes)
-        for i, name in enumerate(names):
-            ax = axes_arr[i]
-            ax.plot(chain[:, i], lw=0.7, alpha=0.9)
-            ax.set_ylabel(labels[i])
-            if plot_fixed and name in self.fixed_names:
-                ax.axhline(float(self.fixed_params[name]), ls="--", lw=1.0)
-        axes_arr[-1].set_xlabel("sample index")
-        fig.tight_layout()
-        return fig
+        data = self.return_all_samples(results=results) if plot_fixed else self.return_sampled_samples(results=results)
+        return plot_trace(
+            data, 
+            burn=burn,
+            fixed_params=self.fixed_params,
+            fixed_names=self.fixed_names,
+            **kwargs
+        )
 
     def plot_corner(self, *, burn: int = 0, results=None, **kwargs):
-        import corner
+        """
+        Corner plot of sampled parameters.
+        
+        Parameters
+        ----------
+        burn : int, optional
+            Number of initial samples to discard, by default 0.
+        results : optional
+            Results from run_sampler(). If None, uses stored results.
+        **kwargs
+            Additional keyword arguments passed to corner.corner().
+            
+        Returns
+        -------
+        matplotlib.figure.Figure
+            Corner plot figure.
+        """
+        from .plots import plot_corner
+
         data = self.return_sampled_samples(results=results)
-        chain = data["chain"]
-        if burn > 0:
-            chain = chain[burn:]
-        labels = data["labels"]
-        fig = corner.corner(chain, labels=labels, **kwargs)
-        return fig
+        return plot_corner(data, burn=burn, **kwargs)

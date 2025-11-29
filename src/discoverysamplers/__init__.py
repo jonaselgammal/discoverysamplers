@@ -16,10 +16,28 @@ from .priors import (
     standard_priors,
 )
 
+# Export plotting functions
+from .plots import (
+    plot_trace,
+    plot_corner,
+    plot_corner_multi_temp,
+    plot_nleaves_histogram,
+    plot_parameter_summary,
+    plot_run_plot,
+)
+
 __all__ = [
+    # Priors
     "ParsedPrior",
     "PriorParsingError",
     "ParamName",
     "PriorSpec",
     "standard_priors",
+    # Plotting
+    "plot_trace",
+    "plot_corner",
+    "plot_corner_multi_temp",
+    "plot_nleaves_histogram",
+    "plot_parameter_summary",
+    "plot_run_plot",
 ]

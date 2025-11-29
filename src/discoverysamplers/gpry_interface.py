@@ -501,6 +501,57 @@ class DiscoveryGPryCobayaBridge:
             "chain": chain_all
         }
 
+    # ------------------------------ Plots ------------------------------ #
+    def plot_trace(self, *, burn: int = 0, plot_fixed: bool = False, **kwargs):
+        """
+        Plot trace of samples vs sample index.
+        
+        Parameters
+        ----------
+        burn : int, optional
+            Number of initial samples to discard, by default 0.
+        plot_fixed : bool, optional
+            If True, includes fixed parameters in the plot, by default False.
+        **kwargs
+            Additional keyword arguments passed to plots.plot_trace().
+            
+        Returns
+        -------
+        matplotlib.figure.Figure
+            Figure containing the trace plots.
+        """
+        from .plots import plot_trace
+
+        data = self.return_all_samples() if plot_fixed else self.return_sampled_samples()
+        return plot_trace(
+            data, 
+            burn=burn,
+            fixed_params=self.fixed_param_dict,
+            fixed_names=self.fixed_names,
+            **kwargs
+        )
+
+    def plot_corner(self, *, burn: int = 0, **kwargs):
+        """
+        Corner plot of sampled parameters.
+        
+        Parameters
+        ----------
+        burn : int, optional
+            Number of initial samples to discard, by default 0.
+        **kwargs
+            Additional keyword arguments passed to corner.corner().
+            
+        Returns
+        -------
+        matplotlib.figure.Figure
+            Corner plot figure.
+        """
+        from .plots import plot_corner
+
+        data = self.return_sampled_samples()
+        return plot_corner(data, burn=burn, **kwargs)
+
 
 __all__ = [
     "build_cobaya_info",

@@ -511,50 +511,59 @@ class DiscoveryNessaiBridge:
 
     # ------------------------------ Plots ------------------------------ #
     def plot_trace(self, *, burn: int = 0, plot_fixed: bool = False,
-                   results: Optional[Mapping[str, Any]] = None):
+                   results: Optional[Mapping[str, Any]] = None, **kwargs):
         """
-        Plot simple trace(s) vs sample index (no walkers/temps in nessai).
-        Returns a matplotlib.figure.Figure.
+        Plot trace of samples vs sample index.
+        
+        Parameters
+        ----------
+        burn : int, optional
+            Number of initial samples to discard, by default 0.
+        plot_fixed : bool, optional
+            If True, includes fixed parameters in the plot, by default False.
+        results : dict, optional
+            Results dict from run_sampler(). If None, uses stored results.
+        **kwargs
+            Additional keyword arguments passed to plots.plot_trace().
+            
+        Returns
+        -------
+        matplotlib.figure.Figure
+            Figure containing the trace plots.
         """
-        import matplotlib.pyplot as plt
+        from .plots import plot_trace
 
         data = self.return_all_samples(results=results) if plot_fixed else self.return_sampled_samples(results=results)
-        chain = data["chain"]
-        names = data["names"]
-        labels = data["labels"]
-
-        if burn > 0:
-            chain = chain[burn:]
-
-        n_params = len(names)
-        fig, axes = plt.subplots(n_params, 1, figsize=(9, max(2.2, 1.8 * n_params)), sharex=True)
-
-        axes_arr = np.atleast_1d(axes)
-        for i, name in enumerate(names):
-            ax = axes_arr[i]
-            ax.plot(chain[:, i], lw=0.7, alpha=0.9)
-            ax.set_ylabel(labels[i])
-            if plot_fixed and name in self.fixed_names:
-                ax.axhline(float(self.fixed_params[name]), ls="--", lw=1.0, color="r", label="fixed")
-                ax.legend(loc="best", frameon=False)
-        axes_arr[-1].set_xlabel("sample index")
-        fig.tight_layout()
-        return fig
+        return plot_trace(
+            data, 
+            burn=burn,
+            fixed_params=self.fixed_params,
+            fixed_names=self.fixed_names,
+            **kwargs
+        )
 
     def plot_corner(self, *, burn: int = 0, results: Optional[Mapping[str, Any]] = None, **kwargs):
         """
-        Corner plot of sampled parameters (single temperature/chain).
-        Returns a matplotlib.figure.Figure.
+        Corner plot of sampled parameters.
+        
+        Parameters
+        ----------
+        burn : int, optional
+            Number of initial samples to discard, by default 0.
+        results : dict, optional
+            Results dict from run_sampler(). If None, uses stored results.
+        **kwargs
+            Additional keyword arguments passed to corner.corner().
+            
+        Returns
+        -------
+        matplotlib.figure.Figure
+            Corner plot figure.
         """
-        import corner
+        from .plots import plot_corner
 
         data = self.return_sampled_samples(results=results)
-        chain = data["chain"]
-        if burn > 0:
-            chain = chain[burn:]
-        labels = data["labels"]
-        fig = corner.corner(chain, labels=labels, **kwargs)
-        return fig
+        return plot_corner(data, burn=burn, **kwargs)
 
 
 
