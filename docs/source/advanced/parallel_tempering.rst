@@ -21,14 +21,11 @@ Basic Usage
        )
    )
 
-   # Initialize for all temperatures
-   initial_state = bridge.sample_priors(nwalkers=32, ntemps=8)
-
-   # Run MCMC
-   sampler.run_mcmc(initial_state, nsteps=10000, progress=True)
+   # Run MCMC (initial positions drawn from priors automatically)
+   bridge.run_sampler(nsteps=10000)
 
    # Extract cold chain samples (default)
-   samples = sampler.get_chain(discard=1000, flat=True)
+   samples = bridge.return_all_samples()
 
 Temperature Configuration
 -------------------------
@@ -68,7 +65,8 @@ Diagnostics
 .. code-block:: python
 
    # Check swap acceptance (target: 20-40%)
-   swap_frac = sampler.tswap_acceptance_fraction
+   # After running the sampler:
+   swap_frac = bridge.sampler.tswap_acceptance_fraction
    for i, frac in enumerate(swap_frac):
        print(f"Swap {i} ↔ {i+1}: {frac:.2%}")
 
@@ -82,17 +80,16 @@ With Reversible-Jump
 
    from discoverysamplers.eryn_RJ_interface import DiscoveryErynRJBridge
 
+   # rj_model is an RJ_Discovery_model instance
+   # priors are in Eryn RJ format: {branch: {param_idx: distribution}}
    rj_bridge = DiscoveryErynRJBridge(
-       discovery_model=rj_model,
+       rj_model=rj_model,
        priors=rj_priors,
-       branch_names=['cw'],
-       nleaves_min={'cw': 0},
-       nleaves_max={'cw': 5},
    )
 
    sampler = rj_bridge.create_sampler(
        nwalkers=32,
-       tempering_kwargs=dict(ntemps=8, Tmax=30.0),
+       ntemps=8,  # Parallel tempering
    )
 
 See Also

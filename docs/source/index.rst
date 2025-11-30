@@ -3,7 +3,28 @@
 Welcome to discoverysamplers documentation!
 ============================================
 
-**discoverysamplers** is a collection of bridge interfaces that connect Discovery (a JAX-based Pulsar Timing Array analysis framework) to various nested sampling and MCMC samplers. The package provides lightweight wrappers that adapt Discovery-style models to the APIs expected by different sampling backends.
+**discoverysamplers** is a collection of bridge interfaces that connect `Discovery <https://github.com/nanograv/discovery>`_ (a JAX-based Pulsar Timing Array analysis framework) to various nested sampling and MCMC samplers.
+
+.. list-table::
+   :widths: 30 70
+
+   * - **Author**
+     - Jonas El Gammal
+   * - **Source**
+     - `Source code on GitHub <https://github.com/jonaselgammal/discoverysamplers>`_
+   * - **Documentation**
+     - `Documentation on Read the Docs <https://discoverysamplers.readthedocs.io>`_
+   * - **License**
+     - `MIT <https://opensource.org/licenses/MIT>`_
+   * - **Support**
+     - For questions, use `GitHub Issues <https://github.com/jonaselgammal/discoverysamplers/issues>`_ or drop me an email
+   * - **Installation**
+     - Clone from `GitHub <https://github.com/jonaselgammal/discoverysamplers>`_
+
+Overview
+--------
+
+The package provides lightweight wrappers that adapt `Discovery <https://github.com/nanograv/discovery>`_-style models (callables accepting parameter dictionaries) to the APIs expected by different sampling backends.
 
 Key Features
 ------------
@@ -11,7 +32,6 @@ Key Features
 - **Unified Interface**: Consistent API across multiple sampling backends
 - **Flexible Prior Specification**: Support for multiple prior formats (dicts, tuples, callables)
 - **JAX Integration**: Optional JIT compilation for improved performance
-- **Multiple Samplers**: Support for Eryn (MCMC), Nessai (flow-based nested sampling), JAX-NS, and GPry (GP emulation)
 - **Parameter Management**: Automatic handling of fixed vs. sampled parameters
 - **LaTeX Labels**: Built-in support for publication-quality plotting
 
@@ -19,24 +39,24 @@ Supported Samplers
 ------------------
 
 .. list-table::
-   :widths: 20 30 50
+   :widths: 15 20 65
    :header-rows: 1
 
    * - Sampler
      - Type
      - Key Features
-   * - **Eryn**
+   * - `Eryn <https://github.com/mikekatz04/Eryn>`_
      - MCMC (Ensemble)
      - Parallel tempering, reversible-jump MCMC support
-   * - **Nessai**
+   * - `Nessai <https://github.com/mj-will/nessai>`_
      - Nested Sampling
      - Flow-based proposals, importance nested sampling
-   * - **JAX-NS**
+   * - `JAX-NS <https://github.com/Joshuaalbert/jaxns>`_
      - Nested Sampling
      - Pure JAX implementation, vectorized likelihood evaluation
-   * - **GPry**
+   * - `GPry <https://github.com/jonaselgammal/GPry>`_
      - GP Emulation
-     - Gaussian Process surrogate model with active learning, accelerates expensive likelihoods
+     - Gaussian Process surrogate model with active learning
 
 Quick Start
 -----------
@@ -45,31 +65,45 @@ Install the package:
 
 .. code-block:: bash
 
-   pip install discoverysamplers
+   git clone https://github.com/jonaselgammal/discoverysamplers.git
+   cd discoverysamplers
+   pip install .
 
 Basic usage with Nessai:
 
 .. code-block:: python
 
-   from discoverysamplers.nessai_interface import DiscoveryNessaiBridge
+   from discoverysamplers import DiscoveryNessaiBridge
 
-   # Define your Discovery model
+   # Define your model
    def my_model(params):
-       # Your likelihood calculation
-       return log_likelihood
+       return -0.5 * (params['x']**2 + params['y']**2)
 
    # Define priors
    priors = {
-       'mass': ('uniform', 1.0, 3.0),
-       'distance': ('loguniform', 0.1, 100.0),
-       'phase': ('uniform', 0, 2*np.pi),
+       'x': ('uniform', -5.0, 5.0),
+       'y': ('uniform', -5.0, 5.0),
    }
 
    # Create bridge and run sampler
    bridge = DiscoveryNessaiBridge(my_model, priors)
-   results = bridge.run_sampler(nlive=1000, output='output_directory/')
+   results = bridge.run_sampler(nlive=1000, output='output/')
 
 See the :doc:`user_guide/quickstart` for more detailed examples.
+
+Citation
+--------
+
+If you use ``discoverysamplers`` in your research, please cite:
+
+.. code-block:: bibtex
+
+   @software{discoverysamplers,
+     author = {El Gammal, Jonas},
+     title = {discoverysamplers: Tools for Bayesian inference with Discovery},
+     year = {2025},
+     url = {https://github.com/jonaselgammal/discoverysamplers}
+   }
 
 Documentation Contents
 ----------------------
@@ -90,19 +124,6 @@ Documentation Contents
 
 .. toctree::
    :maxdepth: 2
-   :caption: API Reference
-
-   api/priors
-   api/likelihood
-   api/plots
-   api/eryn_interface
-   api/nessai_interface
-   api/jaxns_interface
-   api/gpry_interface
-   api/eryn_rj_interface
-
-.. toctree::
-   :maxdepth: 2
    :caption: Advanced Topics
 
    advanced/performance
@@ -116,6 +137,19 @@ Documentation Contents
    :caption: Examples
 
    examples/notebooks
+
+.. toctree::
+   :maxdepth: 2
+   :caption: API Reference
+
+   api/priors
+   api/likelihood
+   api/plots
+   api/eryn_interface
+   api/nessai_interface
+   api/jaxns_interface
+   api/gpry_interface
+   api/eryn_rj_interface
 
 Indices and tables
 ==================

@@ -1,23 +1,32 @@
 # discoverysamplers
 
-**Bridge interfaces connecting Discovery models to various sampling algorithms.**
+**Bridge interfaces connecting [Discovery](https://github.com/ark0015/discovery) models to various sampling algorithms.**
 
 [![Documentation Status](https://readthedocs.org/projects/discoverysamplers/badge/?version=latest)](https://discoverysamplers.readthedocs.io/en/latest/?badge=latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://github.com/jonaselgammal/discoverysamplers/actions/workflows/tests.yml/badge.svg)](https://github.com/jonaselgammal/discoverysamplers/actions/workflows/tests.yml)
 
-📖 **Documentation**: [https://discoverysamplers.readthedocs.io](https://discoverysamplers.readthedocs.io)
+| | |
+|---|---|
+| **Author** | Jonas El Gammal |
+| **Source** | [Source code on GitHub](https://github.com/jonaselgammal/discoverysamplers) |
+| **Documentation** | [Documentation on Read the Docs](https://discoverysamplers.readthedocs.io) |
+| **License** | [MIT](https://opensource.org/licenses/MIT) |
+| **Support** | For questions, use [GitHub Issues](https://github.com/jonaselgammal/discoverysamplers/issues) or drop me an email |
+| **Installation** | Clone from [GitHub](https://github.com/jonaselgammal/discoverysamplers) |
 
 ## Overview
 
-`discoverysamplers` provides lightweight wrappers that adapt Discovery-style models (callables accepting parameter dictionaries) to the APIs expected by different sampling backends.
+`discoverysamplers` provides lightweight wrappers that adapt [Discovery](https://github.com/nanograv/discovery)-style models to the APIs expected by different sampling backends.
 
 ### Supported Samplers
 
-- **Eryn**: Ensemble MCMC with parallel tempering and reversible-jump support
-- **Nessai**: Flow-based nested sampling with importance sampling
-- **JAX-NS**: Pure JAX nested sampling with GPU support
-- **GPry**: Gaussian process emulation via Cobaya framework
+| Sampler | Type | Description |
+|---------|------|-------------|
+| [Eryn](https://github.com/mikekatz04/Eryn) | MCMC | Ensemble MCMC with parallel tempering and reversible-jump support |
+| [Nessai](https://github.com/mj-will/nessai) | Nested Sampling | Flow-based nested sampling with importance sampling |
+| [JAX-NS](https://github.com/Joshuaalbert/jaxns) | Nested Sampling | Pure JAX nested sampling with GPU support |
+| [GPry](https://github.com/jonaselgammal/GPry) | GP Emulation | Gaussian process surrogate model via Cobaya framework |
 
 ## Installation
 
@@ -79,17 +88,13 @@ priors = {
 }
 ```
 
-## Documentation
-
-Full documentation: [https://discoverysamplers.readthedocs.io](https://discoverysamplers.readthedocs.io)
-
 ## Citation
 
 ```bibtex
 @software{discoverysamplers,
   author = {El Gammal, Jonas},
-  title = {discoverysamplers: Bridge interfaces for Bayesian samplers},
-  year = {2024},
+  title = {discoverysamplers: Tools for Bayesian inference with Discovery},
+  year = {2025},
   url = {https://github.com/jonaselgammal/discoverysamplers}
 }
 ```

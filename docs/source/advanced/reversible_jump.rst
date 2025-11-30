@@ -71,81 +71,60 @@ Here's a complete example using the ``RJ_Discovery_model`` and ``DiscoveryErynRJ
 .. code-block:: python
 
    import numpy as np
+   from eryn.prior import uniform_dist
    from discoverysamplers.eryn_RJ_interface import RJ_Discovery_model, DiscoveryErynRJBridge
 
-   # 1. Define signal constructor (returns (delay_fn, param_names))
-   def cw_signal_constructor(psr):
+   # 1. Define signal constructor for variable components
+   def cw_signal_constructor():
        """
        Signal constructor for continuous wave sources.
-
+       
        Returns
        -------
        delay_fn : callable
            Function computing signal delay
        param_names : list of str
-           Parameter names for this signal
+           Base parameter names for this signal
        """
        def delay_fn(params):
-           f = params['f']
-           h = params['h']
-           phi = params['phi']
-           # Compute CW delay
-           return compute_cw_delay(f, h, phi, psr.toas)
-
-       return delay_fn, ['f', 'h', 'phi']
+           # Compute CW delay based on params
+           return compute_cw_delay(params)
+       
+       return delay_fn, ['log10_h0', 'log10_f0', 'ra', 'sindec']
 
    # 2. Create RJ model wrapper
    rj_model = RJ_Discovery_model(
-       signal_constructors=[cw_signal_constructor],  # One per branch
-       pulsar=psr,
-       variable_component_numbers=[0, 1, 2, 3, 4],   # Allowed component counts
+       psrs=pulsars,
+       fixed_components={'per_psr': {'base': make_fixed_components}},
+       variable_components={'global': {'cw': (cw_signal_constructor, ['log10_h0', 'log10_f0', 'ra', 'sindec'])}},
+       variable_component_numbers={'cw': (1, 4)},  # 1 to 4 sources
    )
 
-   # 3. Define branch-indexed priors
+   # 3. Define Eryn-format priors (branch -> param_index -> distribution)
    priors = {
        'cw': {
-           0: {},  # Empty for 0 components
-           1: {
-               'f': ('loguniform', 1e-9, 1e-7),
-               'h': ('loguniform', 1e-20, 1e-14),
-               'phi': ('uniform', 0, 2*np.pi),
-           },
-           2: {
-               'f': ('loguniform', 1e-9, 1e-7),
-               'h': ('loguniform', 1e-20, 1e-14),
-               'phi': ('uniform', 0, 2*np.pi),
-           },
-           3: {
-               'f': ('loguniform', 1e-9, 1e-7),
-               'h': ('loguniform', 1e-20, 1e-14),
-               'phi': ('uniform', 0, 2*np.pi),
-           },
-           4: {
-               'f': ('loguniform', 1e-9, 1e-7),
-               'h': ('loguniform', 1e-20, 1e-14),
-               'phi': ('uniform', 0, 2*np.pi),
-           },
+           0: uniform_dist(-20, -11),   # log10_h0
+           1: uniform_dist(-9, -7),      # log10_f0
+           2: uniform_dist(0, 2*np.pi),  # ra
+           3: uniform_dist(-1, 1),       # sindec
        }
    }
 
    # 4. Create the bridge
    bridge = DiscoveryErynRJBridge(
-       discovery_model=rj_model,
+       rj_model=rj_model,
        priors=priors,
-       branch_names=['cw'],
-       nleaves_min={'cw': 0},  # Minimum: 0 sources
-       nleaves_max={'cw': 4},  # Maximum: 4 sources
    )
 
    # 5. Create sampler (parallel tempering recommended for RJMCMC)
    sampler = bridge.create_sampler(
        nwalkers=32,
-       tempering_kwargs=dict(ntemps=4),
+       ntemps=4,
    )
 
    # 6. Initialize and run
-   state = bridge.sample_priors(nwalkers=32, ntemps=4)
-   sampler.run_mcmc(state, nsteps=20000, progress=True)
+   state = bridge.initialize_state(initial_nleaves=1)
+   bridge.run_sampler(nsteps=20000, initial_state=state, progress=True)
 
 How RJ_Discovery_model Works
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -156,13 +135,7 @@ The ``RJ_Discovery_model`` class:
 2. **Caches likelihoods** to avoid recomputing during sampling
 3. **Maps parameters** from Eryn's nested list format to Discovery dict format
 
-.. code-block:: python
-
-   # Eryn calls logL with nested lists:
-   # params[branch_idx][component_idx] has shape (nwalkers, 1)
-
-   # RJ_Discovery_model converts to dict format for Discovery:
-   # {'f': value, 'h': value, 'phi': value}
+The model caches likelihoods for all configurations specified in ``variable_component_numbers``.
 
 Analyzing Results
 -----------------
@@ -175,56 +148,28 @@ The most important result is the posterior distribution over component counts:
 .. code-block:: python
 
    # Get number of leaves (components) per sample
-   nleaves = sampler.get_nleaves()['cw']  # Shape: (nsteps, ntemps, nwalkers)
+   nleaves = bridge.return_nleaves()  # Shape: (nsteps, ntemps, nwalkers)
 
    # Extract cold chain (temp=0)
    cold_nleaves = nleaves[:, 0, :].flatten()
 
    # Plot histogram
-   import matplotlib.pyplot as plt
-
-   fig, ax = plt.subplots(figsize=(8, 5))
-   counts = np.bincount(cold_nleaves.astype(int), minlength=5)
-   probs = counts / counts.sum()
-
-   ax.bar(range(len(probs)), probs)
-   ax.set_xlabel('Number of CW sources')
-   ax.set_ylabel('Posterior probability')
-   ax.set_title('Model selection: number of sources')
-
-   for i, p in enumerate(probs):
-       ax.text(i, p + 0.02, f'{p:.2f}', ha='center')
-
-   plt.tight_layout()
-   plt.savefig('model_posterior.png')
+   bridge.plot_nleaves_histogram()
 
 Parameter Estimation
 ^^^^^^^^^^^^^^^^^^^^
 
-Extract parameters for a specific number of components:
+Extract parameters using the bridge methods:
 
 .. code-block:: python
 
-   # Get chain for branch 'cw' from cold chain
-   chain = sampler.get_chain()['cw'][:, 0, :, :, :]  # Cold chain only
-   # Shape: (nsteps, nwalkers, max_leaves, ndim_per_leaf)
+   # Get flattened samples (excludes inactive sources)
+   flat_samples = bridge.return_flat_samples(temperature=0)
 
-   # Get corresponding nleaves
-   nleaves = sampler.get_nleaves()['cw'][:, 0, :]  # (nsteps, nwalkers)
-
-   # Extract samples where exactly 2 sources were present
-   n_target = 2
-   mask = (nleaves == n_target)
-
-   # Get parameters for these samples
-   samples_2src = chain[mask][:, :n_target, :]  # (n_samples, 2, ndim_per_leaf)
-
-   # Compute statistics
-   print(f"Samples with {n_target} sources: {mask.sum()}")
-   for i in range(n_target):
-       print(f"Source {i}:")
-       print(f"  f: {np.mean(samples_2src[:, i, 0]):.2e}")
-       print(f"  h: {np.mean(samples_2src[:, i, 1]):.2e}")
+   # Get full chain with structure
+   samples = bridge.return_sampled_samples(temperature=0)
+   chain = samples['chain']  # (nsteps, nwalkers, nleaves_max, ndim)
+   param_names = samples['names']
 
 Using the Corner Plot Helper
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -233,13 +178,9 @@ The bridge provides a convenience method for corner plots:
 
 .. code-block:: python
 
-   # Make corner plot for samples with 2 components
-   fig = bridge.make_corner_plot(
-       sampler,
-       n_components=2,
-       discard=5000,  # Burn-in
-   )
-   fig.savefig('corner_2sources.png')
+   # Make corner plot of all active samples
+   fig = bridge.plot_corner(temperature=0)
+   fig.savefig('corner_rjmcmc.png')
 
 Best Practices
 --------------
@@ -250,7 +191,7 @@ Best Practices
 
       sampler = bridge.create_sampler(
           nwalkers=32,
-          tempering_kwargs=dict(ntemps=4),  # 4-8 temperatures typical
+          ntemps=4,  # 4-8 temperatures typical
       )
 
 2. **Start with reasonable nleaves_max**: Don't set too high; it increases computational cost

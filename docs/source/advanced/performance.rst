@@ -250,22 +250,20 @@ Eryn
 Monitoring Performance
 ----------------------
 
-Track Sampling Progress
-^^^^^^^^^^^^^^^^^^^^^^^
+Timing Your Computations
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+**Timing the full sampling run:**
 
 .. code-block:: python
 
    import time
 
    start = time.time()
-
-   # Nessai: check iteration count
    results = bridge.run_sampler(nlive=1000, output='output/')
-
    end = time.time()
-   runtime = end - start
 
-   # Analyze efficiency
+   runtime = end - start
    n_likelihood_calls = results.get('total_likelihood_evaluations', 0)
    time_per_call = runtime / n_likelihood_calls if n_likelihood_calls > 0 else 0
 
@@ -273,24 +271,133 @@ Track Sampling Progress
    print(f"Likelihood calls: {n_likelihood_calls}")
    print(f"Time per call: {time_per_call*1000:.3f} ms")
 
-Memory Profiling
-^^^^^^^^^^^^^^^^
+**Timing individual likelihood evaluations:**
+
+.. code-block:: python
+
+   import time
+   import numpy as np
+
+   # Generate test parameters
+   test_params = {'x': 1.0, 'y': 2.0}
+
+   # Warm-up call (important for JIT-compiled functions!)
+   # The first call triggers compilation and will be much slower
+   _ = model(test_params)
+
+   # Time multiple evaluations
+   n_calls = 1000
+   start = time.time()
+   for _ in range(n_calls):
+       _ = model(test_params)
+   end = time.time()
+
+   time_per_call = (end - start) / n_calls
+   print(f"Time per likelihood call: {time_per_call*1000:.3f} ms")
+   print(f"Calls per second: {1/time_per_call:.1f}")
+
+.. note::
+
+   If you are using JIT compilation, the first evaluation triggers compilation 
+   and will be significantly slower (often 10-100x). Always run a warm-up call 
+   outside your timing loop, or discard the first timing measurement.
+
+Profiling
+^^^^^^^^^
+
+**Basic Python profiling:**
+
+.. code-block:: python
+
+   import cProfile
+   import pstats
+
+   def run_sampling():
+       bridge.run_sampler(nlive=100, max_samples=1000)
+
+   # Profile sampling
+   cProfile.run('run_sampling()', 'profile_stats')
+
+   # Analyze results
+   p = pstats.Stats('profile_stats')
+   p.sort_stats('cumulative')
+   p.print_stats(20)  # Top 20 slowest functions
+
+**Memory profiling:**
 
 .. code-block:: python
 
    import tracemalloc
 
-   # Start memory tracking
    tracemalloc.start()
-
-   # Run sampling
    results = bridge.run_sampler(nlive=1000, max_samples=10000)
-
-   # Get peak memory
    current, peak = tracemalloc.get_traced_memory()
    print(f"Peak memory: {peak / 1024**2:.1f} MB")
-
    tracemalloc.stop()
+
+**JAX profiling with Perfetto:**
+
+For detailed profiling of JAX computations (GPU/TPU activity, XLA operations, 
+memory usage), use JAX's built-in profiler with `Perfetto <https://ui.perfetto.dev>`_:
+
+.. code-block:: python
+
+   import jax
+
+   # Option 1: Context manager with automatic Perfetto link
+   with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
+       # Run the operations to be profiled
+       results = bridge.run_sampler(nlive=100, max_samples=1000)
+       # Block until computation is complete (important for async dispatch)
+       if hasattr(results, 'block_until_ready'):
+           results.block_until_ready()
+
+   # Option 2: Manual start/stop for more control
+   jax.profiler.start_trace("/tmp/jax-trace")
+   results = bridge.run_sampler(nlive=100, max_samples=1000)
+   jax.profiler.stop_trace()
+
+After running, open the generated link or go to `ui.perfetto.dev <https://ui.perfetto.dev>`_ 
+and load the trace file. The Perfetto UI provides:
+
+- Timeline visualization of GPU/TPU operations
+- Memory allocation tracking
+- XLA operation breakdown
+- Identification of performance bottlenecks
+
+**Using XProf (TensorBoard profiling):**
+
+For more advanced analysis, install XProf:
+
+.. code-block:: bash
+
+   pip install xprof
+
+Then capture and view traces:
+
+.. code-block:: python
+
+   import jax
+
+   # Start profiler server
+   jax.profiler.start_server(9999)
+
+   # Run your computation
+   results = bridge.run_sampler(nlive=1000)
+
+   # Stop when done
+   jax.profiler.stop_server()
+
+Launch the viewer:
+
+.. code-block:: bash
+
+   xprof --port 8791 /tmp/jax-trace
+
+Navigate to ``http://localhost:8791/`` to view the trace. Use the "trace_viewer" 
+tool to see a timeline of execution. See the 
+`JAX profiling documentation <https://jax.readthedocs.io/en/latest/profiling.html>`_ 
+for more details.
 
 Troubleshooting Performance Issues
 -----------------------------------
