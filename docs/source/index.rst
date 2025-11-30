@@ -139,6 +139,12 @@ Documentation Contents
    examples/notebooks
 
 .. toctree::
+   :maxdepth: 1
+   :caption: Acknowledgements
+
+   acknowledgements
+
+.. toctree::
    :maxdepth: 2
    :caption: API Reference
 
