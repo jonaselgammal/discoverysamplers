@@ -36,7 +36,6 @@ import numpy as np
 import re
 from typing import Mapping, Sequence, Optional, Dict, List, Any
 import warnings
-import sys ### REMOVE ME
 
 try:
     from eryn.prior import uniform_dist, log_uniform, ProbDistContainer
