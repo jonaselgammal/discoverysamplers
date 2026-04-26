@@ -612,11 +612,15 @@ class RJ_Discovery_model:
                 param_dict[pname] = branch_array[0, j]
 
         # Variable (RJ) branches: each has shape (n_active_leaves, ndim_branch)
+        # Eryn passes None for branches with 0 active leaves.
         config_override = {}
         for comp_index, (comp_name, base_names) in enumerate(
             self.variable_params.items()
         ):
             branch_array = all_branch_data[n_fixed + comp_index]
+            if branch_array is None:
+                config_override[comp_name] = 0
+                continue
             if branch_array.ndim == 1:
                 branch_array = branch_array[np.newaxis, :]
             n_sources = branch_array.shape[0]
@@ -933,6 +937,7 @@ class DiscoveryErynRJBridge:
         move_cov_factor: float = 0.01,
         rj_moves: Any = True,
         checkpoint_file: Optional[str] = None,
+        zero_like=False,
         **kwargs,
     ) -> EnsembleSampler:
         """
@@ -949,8 +954,7 @@ class DiscoveryErynRJBridge:
         move_cov_factor : float, optional
             Factor for diagonal covariance in default GaussianMove. Default 0.01.
         rj_moves : bool or str or list, optional
-            Reversible-jump move configuration passed to Eryn. For multi-branch
-            setups, ``"separate_branches"`` is recommended. Default ``True``.
+            Default ``True``.
         checkpoint_file : str, optional
             Path to an HDF5 file for checkpointing. If provided, the sampler
             stores all chain data to this file and can be resumed from it.
@@ -990,15 +994,19 @@ class DiscoveryErynRJBridge:
         tempering_kwargs = kwargs.pop("tempering_kwargs", None)
         if tempering_kwargs is None and ntemps > 1:
             tempering_kwargs = {"ntemps": ntemps}
+        else:
+            print(tempering_kwargs)
 
-        # For multi-branch with fixed branches, recommend "separate_branches"
-        if self.has_fixed_branches and rj_moves is True:
-            rj_moves = "separate_branches"
-
+        if zero_like:
+            def temp_like(*args, **kwargs):
+                return 0.0
+        else:
+            temp_like = self.rj_model.logL
+        
         self.sampler = EnsembleSampler(
             nwalkers,
             ndims,
-            self.rj_model.logL,
+            temp_like,
             priors=self.priors,
             tempering_kwargs=tempering_kwargs,
             nbranches=len(self.all_branch_names),
