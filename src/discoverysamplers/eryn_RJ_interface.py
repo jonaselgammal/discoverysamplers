@@ -612,11 +612,15 @@ class RJ_Discovery_model:
                 param_dict[pname] = branch_array[0, j]
 
         # Variable (RJ) branches: each has shape (n_active_leaves, ndim_branch)
+        # Eryn passes None for branches with 0 active leaves.
         config_override = {}
         for comp_index, (comp_name, base_names) in enumerate(
             self.variable_params.items()
         ):
             branch_array = all_branch_data[n_fixed + comp_index]
+            if branch_array is None:
+                config_override[comp_name] = 0
+                continue
             if branch_array.ndim == 1:
                 branch_array = branch_array[np.newaxis, :]
             n_sources = branch_array.shape[0]
